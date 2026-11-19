@@ -1,24 +1,4 @@
 #!/usr/bin/env python3
-"""fetch_flashsale.py v0.5 — Lấy danh sách sản phẩm flash sale Bách Hoá XANH bằng API.
-
-Đã kiểm chứng thật ngày 17/11/2026 (probe v0.4 trên máy Phước, HTTP 200 cả 3 bước):
-  1) POST /game/gw/Home/GetLineTabHome -> data.lstTimeLineFS (các ca trong ngày)
-  2) POST /game/gw/FlashSale/GetListProductFlashSale -> data.lstProduct theo ca
-  3) POST /gw/FlashSale/GetCurrentStockFS -> data[].remainingQuantity (suất còn lại)
-
-Mặc định lấy ca ĐANG DIỄN RA + các ca SẮP DIỄN RA trong ngày (đây là phần
-"giá sản phẩm sắp sale"). Tuỳ chọn: --timeline <id> lấy đúng 1 ca, --all lấy cả ngày.
-Kết quả in ra màn hình và ghi file JSON (mặc định flashsale-<ngày giờ>.json).
-
-Lưu ý về giá: mảng productPrices của 1 sản phẩm có thể có nhiều phần tử;
-script ưu tiên phần tử type=12 (theo ghi chú API thế hệ trước, type 12 là
-giá flash sale), không có thì lấy phần tử đầu — và luôn lưu NGUYÊN mảng
-productPrices vào file JSON để đối chiếu với giá hiển thị trên web.
-
-Chỉ đọc công khai, không đăng nhập (customerId=0), không giỏ hàng/đặt hàng.
-deviceid là UUID ngẫu nhiên mỗi lần chạy. Giãn cách mặc định 0.5s/request;
-gặp lỗi tầng mạng (reset/timeout) thì dừng và báo rõ, không thử dồn dập.
-"""
 import argparse
 import gzip
 import json
