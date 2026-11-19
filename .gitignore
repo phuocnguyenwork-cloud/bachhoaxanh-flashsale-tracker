@@ -1,0 +1,22 @@
+# Virtual environment
+.venv/
+venv/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Data files
+flashsale*.json
+
+# Temporary files
+*.tmp
+*.log
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo

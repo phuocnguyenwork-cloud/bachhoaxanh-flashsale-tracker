@@ -1,0 +1,10 @@
+# IgnoreProd.txt — Danh sách ID sản phẩm Bách Hóa XANH không muốn gửi Discord
+# 
+# Cách dùng:
+# 1. Tìm trường "id" của sản phẩm trong file JSON sau khi fetch (hoặc từ log terminal)
+# 2. Dán mã ID vào file này, mỗi dòng một ID (hoặc cách nhau bằng dấu phẩy)
+# 3. Các dòng bắt đầu bằng dấu # hoặc để trống sẽ được bỏ qua
+#
+# Ví dụ:
+# 333450
+# 214560
