@@ -100,25 +100,38 @@ def calc_discount_percent(price: float | int | None, sys_price: float | int | No
 
 
 def pick_price(prod):
-    """Chọn phần tử giá đại diện trong productPrices: ưu tiên type=12
-    (giá flash sale theo ghi chú API cũ), không có thì phần tử đầu tiên.
-    Tính lại discountPercent từ price và sysPrice thay vì dùng giá trị API."""
+    """Chọn phần tử giá có mức giảm phần trăm sâu nhất trong productPrices.
+    Quét toàn bộ các mức giá (bất kể type), tính discountPercent từ price và sysPrice."""
     prices = prod.get("productPrices") or []
-    chosen, source = None, None
-    for p in prices:
-        if isinstance(p, dict) and p.get("type") == 12:
-            chosen, source = p, "type12"
-            break
-    if chosen is None and prices and isinstance(prices[0], dict):
-        chosen, source = prices[0], "first"
-    if chosen is None:
+    if not prices:
         return None
-    pr = chosen.get("price")
-    spr = chosen.get("sysPrice")
-    calc_pct = calc_discount_percent(pr, spr)
+
+    best_item = None
+    best_pct = -1
+
+    for p in prices:
+        if isinstance(p, dict):
+            pr = p.get("price")
+            spr = p.get("sysPrice")
+            pct = calc_discount_percent(pr, spr)
+            if pct > best_pct:
+                best_pct = pct
+                best_item = p
+
+    # Nếu không có mức nào giảm (tất cả đều 0% hoặc lỗi), lấy phần tử đầu tiên
+    if best_item is None:
+        best_item = prices[0] if isinstance(prices[0], dict) else {}
+        pr = best_item.get("price")
+        spr = best_item.get("sysPrice")
+        best_pct = calc_discount_percent(pr, spr)
+    else:
+        pr = best_item.get("price")
+        spr = best_item.get("sysPrice")
+
     return {"price": pr, "sysPrice": spr,
-            "discountPercent": calc_pct,
-            "isCanBuy": chosen.get("isCanBuy"), "source": source,
+            "discountPercent": best_pct,
+            "isCanBuy": best_item.get("isCanBuy"),
+            "source": f"type_{best_item.get('type')}",
             "all": prices}
 
 

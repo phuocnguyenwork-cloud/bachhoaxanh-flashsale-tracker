@@ -16,6 +16,7 @@ Tuỳ chọn:
 """
 import argparse
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -60,8 +61,31 @@ def calc_discount_percent(price: float | int | None, sys_price: float | int | No
     return 0
 
 
-def filter_products(data: dict, threshold: int) -> list[dict]:
-    """Trả list sản phẩm (kèm timeline_info) giảm >= threshold%."""
+def load_ignored_ids(filepath: str = "IgnoreProd.txt") -> set[str]:
+    """Đọc danh sách productId cần bỏ qua từ file txt (1 ID/dòng hoặc cách nhau dấu phẩy/khoảng trắng)."""
+    ignored = set()
+    if not filepath or not os.path.exists(filepath):
+        return ignored
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.replace(",", " ").split()
+                for part in parts:
+                    clean = part.strip()
+                    if clean:
+                        ignored.add(clean)
+    except Exception as e:
+        print(f"⚠ Lỗi khi đọc file bỏ qua {filepath}: {e}", file=sys.stderr)
+    return ignored
+
+
+def filter_products(data: dict, threshold: int, ignored_ids: set[str] = None) -> list[dict]:
+    """Trả list sản phẩm (kèm timeline_info) giảm >= threshold% và không nằm trong ignored_ids."""
+    if ignored_ids is None:
+        ignored_ids = set()
     hits = []
     now = datetime.now().astimezone()
     for tl in data.get("timelines", []):
@@ -84,26 +108,36 @@ def filter_products(data: dict, threshold: int) -> list[dict]:
             "state":      tl.get("state"),
         }
         for p in tl.get("products", []):
-            price_val = p.get("price")
-            sys_val = p.get("sysPrice")
-            if price_val is None or sys_val is None:
-                prices = p.get("productPrices") or []
-                chosen = None
-                for pr in prices:
-                    if isinstance(pr, dict) and pr.get("type") == 12:
-                        chosen = pr
-                        break
-                if not chosen and prices and isinstance(prices[0], dict):
-                    chosen = prices[0]
-                if chosen:
-                    price_val = chosen.get("price")
-                    sys_val = chosen.get("sysPrice")
-                    p["price"] = price_val
-                    p["sysPrice"] = sys_val
+            pid = str(p.get("id", "")).strip()
+            if pid and pid in ignored_ids:
+                continue
 
-            pct = calc_discount_percent(price_val, sys_val)
-            p["discountPercent"] = pct
-            if pct >= threshold:
+            # Quét tất cả các mức giá trong productPrices để tìm mức giảm sâu nhất
+            best_price = p.get("price")
+            best_sys = p.get("sysPrice")
+            best_pct = calc_discount_percent(best_price, best_sys)
+
+            prices = p.get("productPrices") or []
+            for pr in prices:
+                if isinstance(pr, dict):
+                    pr_price = pr.get("price")
+                    pr_sys = pr.get("sysPrice")
+                    pct = calc_discount_percent(pr_price, pr_sys)
+                    if pct > best_pct:
+                        best_pct = pct
+                        best_price = pr_price
+                        best_sys = pr_sys
+
+            if (best_price is None or best_sys is None) and prices and isinstance(prices[0], dict):
+                best_price = prices[0].get("price")
+                best_sys = prices[0].get("sysPrice")
+                best_pct = calc_discount_percent(best_price, best_sys)
+
+            p["price"] = best_price
+            p["sysPrice"] = best_sys
+            p["discountPercent"] = best_pct
+
+            if best_pct >= threshold:
                 hits.append({**p, "_timeline": tl_info})
     # Sắp xếp giảm dần theo discountPercent
     hits.sort(key=lambda x: x.get("discountPercent", 0), reverse=True)
@@ -131,7 +165,7 @@ def build_embeds(hits: list[dict], fetched_at: str, threshold: int) -> list[dict
         ts = fetched_at or "?"
 
     embeds.append({
-        "title": f"🔥 Flash Sale BHX — Giảm ≥{threshold}%",
+        "title": f"Flash Sale BHX — Các sản phẩm giảm ≥{threshold}%",
         "description": (
             f"**{len(hits)} sản phẩm** · 🕒 `{ts}`"
         ),
@@ -156,6 +190,9 @@ def build_embeds(hits: list[dict], fetched_at: str, threshold: int) -> list[dict
                 return iso or "?"
         time_range = f"{_fmt_time(tl.get('dateStart'))}–{_fmt_time(tl.get('dateEnd'))}"
 
+        pid = p.get("id")
+        pid_txt = f"`{pid}`" if pid is not None else "?"
+
         embeds.append({
             "title": p.get("name", "Sản phẩm"),
             "url":   full_url,
@@ -167,6 +204,7 @@ def build_embeds(hits: list[dict], fetched_at: str, threshold: int) -> list[dict
                 {"name": "📦 Số suất",     "value": stock_txt,                   "inline": True},
                 {"name": "⏰ Ca sale",      "value": f"{time_range} · {state_label(tl.get('state', ''))}",
                                                                                   "inline": True},
+                {"name": "🆔 ID",          "value": pid_txt,                     "inline": True},
             ],
         })
 
@@ -231,6 +269,8 @@ def main():
                     help="Discord webhook URL")
     ap.add_argument("--dry-run", action="store_true",
                     help="In ra embed JSON mà không gửi Discord")
+    ap.add_argument("--ignore-file", default="IgnoreProd.txt",
+                    help="File chứa danh sách ID sản phẩm không muốn gửi (mặc định IgnoreProd.txt)")
     # Các tham số khi --fetch
     ap.add_argument("--province",  default="1027")
     ap.add_argument("--store",     default="8916")
@@ -238,6 +278,11 @@ def main():
     ap.add_argument("--page-size", type=int, default=0)
     ap.add_argument("--out",       help="Tên file JSON khi --fetch")
     args = ap.parse_args()
+
+    # ── Đọc danh sách ID bỏ qua nếu có ───────────────────────────────────────
+    ignored_ids = load_ignored_ids(args.ignore_file)
+    if ignored_ids:
+        print(f"🚫 Đã nạp {len(ignored_ids)} product ID cần bỏ qua từ '{args.ignore_file}'.")
 
     # ── Bước 1: lấy dữ liệu ──────────────────────────────────────────────────
     if args.fetch:
@@ -251,13 +296,13 @@ def main():
         data = json.load(f)
 
     # ── Bước 2: lọc ──────────────────────────────────────────────────────────
-    hits = filter_products(data, args.threshold)
+    hits = filter_products(data, args.threshold, ignored_ids=ignored_ids)
     fetched_at = data.get("fetched_at", "")
 
     print(f"\n✅ Tìm thấy {len(hits)} sản phẩm giảm ≥{args.threshold}%:")
     for p in hits:
         tl = p.get("_timeline", {})
-        print(f"  [{p.get('discountPercent'):3d}%] {p.get('name')} "
+        print(f"  [ID: {p.get('id')}] [{p.get('discountPercent'):3d}%] {p.get('name')} "
               f"| {fmt_money(p.get('price'))} (gốc {fmt_money(p.get('sysPrice'))}) "
               f"| còn {p.get('remainingQuantity')} suất")
 
