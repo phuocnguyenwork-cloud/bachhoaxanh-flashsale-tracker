@@ -108,37 +108,66 @@ def calc_discount_percent(price: float | int | None, sys_price: float | int | No
 
 def pick_price(prod):
     """Chọn phần tử giá có mức giảm phần trăm sâu nhất trong productPrices.
-    Quét toàn bộ các mức giá (bất kể type), tính discountPercent từ price và sysPrice."""
+    Quét toàn bộ các mức giá, chỉ chấp nhận các mức hợp lệ (price <= sysPrice) để tránh
+    lỗi dữ liệu lệch đơn vị cân ký của BHX."""
     prices = prod.get("productPrices") or []
     if not prices:
         return None
 
     best_item = None
-    best_pct = -1
+    best_pct = 0
+    valid_prices = []
 
     for p in prices:
         if isinstance(p, dict):
             pr = p.get("price")
             spr = p.get("sysPrice")
-            pct = calc_discount_percent(pr, spr)
-            if pct > best_pct:
-                best_pct = pct
-                best_item = p
+            if pr is not None and spr is not None:
+                try:
+                    pr_val, spr_val = float(pr), float(spr)
+                    # Chỉ chấp nhận biến thể hợp lệ khi giá bán <= giá gốc và giá gốc > 0
+                    if pr_val <= spr_val and spr_val > 0:
+                        pct = int(round((spr_val - pr_val) / spr_val * 100))
+                        valid_prices.append((pct, pr_val, spr_val, p))
+                        if pct > best_pct:
+                            best_pct = pct
+                            best_item = p
+                except (ValueError, TypeError):
+                    pass
 
-    # Nếu không có mức nào giảm (tất cả đều 0% hoặc lỗi), lấy phần tử đầu tiên
-    if best_item is None:
-        best_item = prices[0] if isinstance(prices[0], dict) else {}
+    # Nếu có biến thể giảm giá (>0%), lấy biến thể giảm sâu nhất
+    if best_item is not None:
         pr = best_item.get("price")
         spr = best_item.get("sysPrice")
-        best_pct = calc_discount_percent(pr, spr)
+        source = f"type_{best_item.get('type')}"
+        is_can_buy = best_item.get("isCanBuy")
+    elif valid_prices:
+        # Nếu không có giảm giá, ưu tiên biến thể chuẩn 1kg (netUnitValue == 1 hoặc 0)
+        chosen = None
+        for pct, pr_val, spr_val, p in valid_prices:
+            if p.get("netUnitValue") in (1, 1.0, 0):
+                chosen = p
+                break
+        if chosen is None:
+            chosen = valid_prices[0][3]
+        pr = chosen.get("price")
+        spr = chosen.get("sysPrice")
+        best_pct = 0
+        source = f"type_{chosen.get('type')}"
+        is_can_buy = chosen.get("isCanBuy")
     else:
-        pr = best_item.get("price")
-        spr = best_item.get("sysPrice")
+        # Fallback cuối cùng nếu toàn bộ đều lỗi
+        fallback = prices[0] if isinstance(prices[0], dict) else {}
+        pr = fallback.get("price")
+        spr = fallback.get("sysPrice")
+        best_pct = calc_discount_percent(pr, spr)
+        source = "fallback"
+        is_can_buy = fallback.get("isCanBuy")
 
     return {"price": pr, "sysPrice": spr,
             "discountPercent": best_pct,
-            "isCanBuy": best_item.get("isCanBuy"),
-            "source": f"type_{best_item.get('type')}",
+            "isCanBuy": is_can_buy,
+            "source": source,
             "all": prices}
 
 

@@ -241,20 +241,36 @@ def filter_products(data: dict, threshold: int, ignored_ids: set[str] = None) ->
             best_pct = calc_discount_percent(best_price, best_sys)
 
             prices = p.get("productPrices") or []
+            valid_prices = []
             for pr in prices:
                 if isinstance(pr, dict):
                     pr_price = pr.get("price")
                     pr_sys = pr.get("sysPrice")
-                    pct = calc_discount_percent(pr_price, pr_sys)
-                    if pct > best_pct:
-                        best_pct = pct
-                        best_price = pr_price
-                        best_sys = pr_sys
+                    if pr_price is not None and pr_sys is not None:
+                        try:
+                            pr_val, spr_val = float(pr_price), float(pr_sys)
+                            if pr_val <= spr_val and spr_val > 0:
+                                pct = calc_discount_percent(pr_val, spr_val)
+                                valid_prices.append((pct, pr_val, spr_val, pr))
+                                if pct > best_pct:
+                                    best_pct = pct
+                                    best_price = pr_price
+                                    best_sys = pr_sys
+                        except (ValueError, TypeError):
+                            pass
 
-            if (best_price is None or best_sys is None) and prices and isinstance(prices[0], dict):
-                best_price = prices[0].get("price")
-                best_sys = prices[0].get("sysPrice")
-                best_pct = calc_discount_percent(best_price, best_sys)
+            # Nếu không có biến thể giảm giá, ưu tiên biến thể hợp lệ có price <= sysPrice
+            if best_pct == 0 and valid_prices:
+                chosen = None
+                for pct, pr_val, spr_val, pr in valid_prices:
+                    if pr.get("netUnitValue") in (1, 1.0, 0):
+                        chosen = pr
+                        break
+                if chosen is None:
+                    chosen = valid_prices[0][3]
+                best_price = chosen.get("price")
+                best_sys = chosen.get("sysPrice")
+                best_pct = 0
 
             p["price"] = best_price
             p["sysPrice"] = best_sys
