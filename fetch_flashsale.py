@@ -39,34 +39,41 @@ def _headers():
     }
 
 
-def http_json(method, path, payload=None):
-    """Gọi 1 endpoint API. Trả (status, json|None, error|None)."""
+def http_json(method, path, payload=None, retries=2):
+    """Gọi 1 endpoint API. Trả (status, json|None, error|None). Tự động retry khi gặp sự cố mạng tạm thời."""
     url = BASE + path
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
-    req = urllib.request.Request(url, data=data, method=method)
-    for k, v in _headers().items():
-        req.add_header(k, v)
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT, context=SSL_CTX) as resp:
-            body = resp.read()
-            if resp.headers.get("Content-Encoding") == "gzip":
-                body = gzip.decompress(body)
-            text = body.decode("utf-8", errors="replace")
-            try:
-                return resp.status, json.loads(text), None
-            except json.JSONDecodeError:
-                return resp.status, None, "not-json: " + text[:200]
-    except urllib.error.HTTPError as e:
+    last_err = None
+
+    for attempt in range(retries + 1):
+        req = urllib.request.Request(url, data=data, method=method)
+        for k, v in _headers().items():
+            req.add_header(k, v)
         try:
-            text = e.read().decode("utf-8", errors="replace")
+            with urllib.request.urlopen(req, timeout=TIMEOUT, context=SSL_CTX) as resp:
+                body = resp.read()
+                if resp.headers.get("Content-Encoding") == "gzip":
+                    body = gzip.decompress(body)
+                text = body.decode("utf-8", errors="replace")
+                try:
+                    return resp.status, json.loads(text), None
+                except json.JSONDecodeError:
+                    return resp.status, None, "not-json: " + text[:200]
+        except urllib.error.HTTPError as e:
             try:
-                return e.code, json.loads(text), None
-            except json.JSONDecodeError:
-                return e.code, None, "not-json: " + text[:200]
+                text = e.read().decode("utf-8", errors="replace")
+                try:
+                    return e.code, json.loads(text), None
+                except json.JSONDecodeError:
+                    return e.code, None, "not-json: " + text[:200]
+            except Exception as ex:  # noqa: BLE001
+                return e.code, None, str(ex)
         except Exception as ex:  # noqa: BLE001
-            return e.code, None, str(ex)
-    except Exception as ex:  # noqa: BLE001
-        return None, None, str(ex)
+            last_err = str(ex)
+            if attempt < retries:
+                time.sleep(1.0)
+                continue
+            return None, None, last_err
 
 
 def is_network_error(err):

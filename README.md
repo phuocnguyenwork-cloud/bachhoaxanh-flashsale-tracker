@@ -1,6 +1,24 @@
 # Tool lấy sản phẩm giảm giá bhx:
     Chỉ fetch sản phẩm giảm giá của cả ngày và gửi vào discord. 
     Chức năng tự động đặt hàng và mua cần auth, refresh token nên không đính kèm trong folder này.
+
+---
+
+## Tính năng chính & Tính năng phụ:
+1. **Chức năng chính (Flash Sale chung)**: 
+   - Tự động lấy tất cả các ca Flash Sale đang và sắp diễn ra trong ngày.
+   - Quét mọi biến thể trọng lượng/giá để chọn ra mức giảm sâu nhất.
+   - Lọc các sản phẩm có mức giảm $\ge$ ngưỡng `--threshold` (mặc định 40%) và gửi Embeds lên Discord kèm nút bấm đặt hàng trực tiếp.
+   - Bỏ qua các ca đã kết thúc và các sản phẩm nằm trong danh sách chặn `IgnoreProd.txt`.
+
+2. **Chức năng phụ (`TargetPrice.txt`)**:
+   - Chạy song song độc lập.
+   - Cho phép bạn chỉ định các sản phẩm cụ thể và mức giá kỳ vọng mong muốn.
+   - Khi chạy, bot quét mọi ca sale trong ngày để tìm chính xác ca nào có giá bán $\le$ giá kỳ vọng của bạn và gửi thêm thông báo riêng.
+   - **Lưu ý**: Nếu bạn không điền sản phẩm nào vào `TargetPrice.txt`, bot sẽ chỉ chạy chức năng Flash Sale chính như bình thường.
+
+---
+
 ## Cách cấu hình:
 ### 1. Cấu hình discord webhook vào tool:
    * *Cách 1 :* Mở file `notify_discord.py`, tìm dòng 25 và dán URL webhook vào biến `DEFAULT_WEBHOOK`:
@@ -9,7 +27,7 @@
      ```
    * *Cách 2:* Truyền trực tiếp qua dòng lệnh bằng cờ `--webhook`:
      ```bash
-     .\.venv\bin\python.exe notify_discord.py --fetch --webhook "https://discord.com/api/webhooks/..."
+     python notify_discord.py --fetch --webhook "https://discord.com/api/webhooks/..."
      ```
 
 ---
@@ -28,7 +46,7 @@ Mặc định tool đang cấu hình sẵn cho khu vực TP.HCM (`province=1027`
    (cookie mặc định lấy địa chỉ được set default)
 6. **Truyền vào lệnh chạy:**
    ```bash
-   .\.venv\bin\python.exe notify_discord.py --fetch --province <MÃ_TỈNH> --store <MÃ_STORE> --ward <MÃ_PHƯỜNG>
+   python notify_discord.py --fetch --province <MÃ_TỈNH> --store <MÃ_STORE> --ward <MÃ_PHƯỜNG>
    ```
    *(Hoặc sửa trực tiếp giá trị mặc định ở dòng `ap.add_argument("--province", ...)` trong file `notify_discord.py` để không phải gõ lại mỗi lần).*
 
@@ -45,17 +63,17 @@ pip install -r requirements.txt
 
 * **Chạy quét các ca đang và sắp diễn ra trong ngày & gửi Discord:**
   ```powershell
-  .\.venv\bin\python.exe notify_discord.py --fetch
+  python notify_discord.py --fetch
   ```
 
 * **Chạy thử nghiệm (Xem danh sách sản phẩm trên terminal, không gửi Discord):**
   ```powershell
-  .\.venv\bin\python.exe notify_discord.py --fetch --dry-run
+  python notify_discord.py --fetch --dry-run
   ```
 
 * **Chỉ lọc sản phẩm giảm sâu (Ví dụ từ 50% trở lên):**
   ```powershell
-  .\.venv\bin\python.exe notify_discord.py --fetch --threshold 50
+  python notify_discord.py --fetch --threshold 50
   ```
 
 ---
@@ -75,7 +93,7 @@ Nếu có sản phẩm bạn không bao giờ muốn mua và không muốn bot g
 
 ---
 
-### 4. Theo dõi sản phẩm theo giá kỳ vọng (`TargetPrice.txt`)
+### 4. (Chức năng phụ) Theo dõi sản phẩm theo giá kỳ vọng (`TargetPrice.txt`)
 Nếu bạn muốn theo dõi sản phẩm cụ thể và muốn biết **khi nào (ca nào)** sản phẩm đó có giá bán **thấp hơn hoặc bằng** mức bạn mong muốn:
 
 1. Lấy mã ID sản phẩm từ Discord hoặc file JSON (ví dụ ID `333450` là Thịt heo xay).
@@ -91,4 +109,4 @@ Nếu bạn muốn theo dõi sản phẩm cụ thể và muốn biết **khi nà
    * Quét **mọi khung giờ** và **tất cả mức giá có thể có** (tất cả quy cách đóng gói, trọng lượng...) của sản phẩm đó.
    * Tìm chính xác **ca sale nào (thời gian nào)** có mức giá $\le$ mức bạn kỳ vọng.
    * In chi tiết trên Terminal và gửi Embed riêng nổi bật màu xanh lá lên Discord kèm nút bấm đặt mua nhanh.
-*(Có thể đổi sang file khác bằng cờ `--target-file <duong_dan>`)*.
+*(Nếu file này để trống, chương trình chỉ quét và thông báo Flash Sale chính bình thường)*.

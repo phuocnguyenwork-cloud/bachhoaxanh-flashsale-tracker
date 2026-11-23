@@ -288,7 +288,7 @@ def build_embeds(hits: list[dict], fetched_at: str, threshold: int) -> list[dict
         ts = fetched_at or "?"
 
     embeds.append({
-        "title": f"Flash Sale BHX — Các sản phẩm giảm ≥{threshold}%",
+        "title": f"🔥 Flash Sale BHX — Giảm ≥{threshold}%",
         "description": (
             f"**{len(hits)} sản phẩm** · 🕒 `{ts}`"
         ),
@@ -516,10 +516,10 @@ def main():
     if ignored_ids:
         print(f"🚫 Đã nạp {len(ignored_ids)} product ID cần bỏ qua từ '{args.ignore_file}'.")
 
-    # ── Đọc danh sách giá kỳ vọng nếu có ─────────────────────────────────────
+    # ── Đọc danh sách giá kỳ vọng nếu có (Chức năng phụ) ─────────────────────
     target_prices = load_target_prices(args.target_file)
     if target_prices:
-        print(f"🎯 Đã nạp {len(target_prices)} sản phẩm theo dõi giá kỳ vọng từ '{args.target_file}'.")
+        print(f"🎯 [Chức năng phụ] Đã nạp {len(target_prices)} sản phẩm theo dõi giá kỳ vọng từ '{args.target_file}'.")
 
     # ── Bước 1: lấy dữ liệu ──────────────────────────────────────────────────
     if args.fetch:
@@ -533,11 +533,22 @@ def main():
         data = json.load(f)
     fetched_at = data.get("fetched_at", "")
 
-    # ── Bước 2: Kiểm tra giá kỳ vọng (Target Price) ──────────────────────────
-    target_hits = check_target_prices(data, target_prices, ignored_ids=ignored_ids)
+    # ── Bước 2 (CHỨC NĂNG CHÍNH): Lọc sản phẩm flash sale chung (≥ threshold%) ──
+    hits = filter_products(data, args.threshold, ignored_ids=ignored_ids)
+
+    print(f"\n🔥 [Chức năng chính] Tìm thấy {len(hits)} sản phẩm Flash Sale giảm ≥{args.threshold}%:")
+    for p in hits:
+        tl = p.get("_timeline", {})
+        print(f"  [ID: {p.get('id')}] [{p.get('discountPercent'):3d}%] {p.get('name')} "
+              f"| {fmt_money(p.get('price'))} (gốc {fmt_money(p.get('sysPrice'))}) "
+              f"| còn {p.get('remainingQuantity')} suất")
+
+    # ── Bước 3 (CHỨC NĂNG PHỤ): Kiểm tra giá kỳ vọng (Target Price) ──────────
+    target_hits = []
     if target_prices:
+        target_hits = check_target_prices(data, target_prices, ignored_ids=ignored_ids)
         if target_hits:
-            print(f"\n🎯 TÌM THẤY {len(target_hits)} THỜI ĐIỂM ĐẠT GIÁ KỲ VỌNG:")
+            print(f"\n🎯 [Chức năng phụ] TÌM THẤY {len(target_hits)} THỜI ĐIỂM ĐẠT GIÁ KỲ VỌNG:")
             for th in target_hits:
                 tl = th.get("_timeline", {})
                 t_start = (tl.get('dateStart') or '')[11:16]
@@ -547,46 +558,38 @@ def main():
                 print(f"    -> Giá sale: {fmt_money(th.get('price'))} (Kỳ vọng: ≤ {fmt_money(th.get('target_price'))}, giảm {th.get('discountPercent')}%)")
                 print(f"    -> Khi nào: Ca {tl.get('timelineId', '?')} ({t_range}) · {state_label(tl.get('state', ''))}")
         else:
-            print(f"\nℹ Kiểm tra {len(target_prices)} sản phẩm theo dõi: Chưa có ca nào đạt giá kỳ vọng.")
-
-    # ── Bước 3: Lọc sản phẩm flash sale chung (≥ threshold%) ──────────────────
-    hits = filter_products(data, args.threshold, ignored_ids=ignored_ids)
-
-    print(f"\n✅ Tìm thấy {len(hits)} sản phẩm giảm ≥{args.threshold}%:")
-    for p in hits:
-        tl = p.get("_timeline", {})
-        print(f"  [ID: {p.get('id')}] [{p.get('discountPercent'):3d}%] {p.get('name')} "
-              f"| {fmt_money(p.get('price'))} (gốc {fmt_money(p.get('sysPrice'))}) "
-              f"| còn {p.get('remainingQuantity')} suất")
+            print(f"\nℹ [Chức năng phụ] Rà soát {len(target_prices)} sản phẩm theo dõi: Chưa có ca nào đạt giá kỳ vọng.")
 
     if not hits and not target_hits:
         print("\nKhông có sản phẩm nào đủ điều kiện — không gửi Discord.")
         return 0
 
     # ── Bước 4: build embeds ──────────────────────────────────────────────────
-    target_embeds = build_target_embeds(target_hits, fetched_at)
     general_embeds = build_embeds(hits, fetched_at, args.threshold)
+    target_embeds = build_target_embeds(target_hits, fetched_at)
 
     if args.dry_run:
         print("\n── DRY RUN: payload sẽ gửi Discord ──")
-        if target_embeds:
-            print("\n--- 🎯 Embeds Mục Tiêu Đạt Giá Kỳ Vọng ---")
-            print(json.dumps({"embeds": target_embeds}, ensure_ascii=False, indent=2))
         if general_embeds:
-            print("\n--- 🔥 Embeds Flash Sale Chung ---")
+            print("\n--- 🔥 Embeds Flash Sale Chung (Chính) ---")
             print(json.dumps({"embeds": general_embeds}, ensure_ascii=False, indent=2))
+        if target_embeds:
+            print("\n--- 🎯 Embeds Mục Tiêu Đạt Giá Kỳ Vọng (Phụ) ---")
+            print(json.dumps({"embeds": target_embeds}, ensure_ascii=False, indent=2))
         return 0
 
     # ── Bước 5: gửi Discord ───────────────────────────────────────────────────
-    if target_hits and target_embeds:
-        print(f"\n▶ Đang gửi {len(target_hits)} sản phẩm đạt giá kỳ vọng lên Discord...")
-        send_hits_to_discord(target_hits, target_embeds, args.webhook, batch_title="Mục tiêu")
-
+    # Ưu tiên gửi chức năng chính: Flash Sale giảm sâu
     if hits and general_embeds:
-        print(f"\n▶ Đang gửi {len(hits)} sản phẩm Flash Sale chung lên Discord...")
+        print(f"\n▶ Đang gửi {len(hits)} sản phẩm Flash Sale chính lên Discord...")
         send_hits_to_discord(hits, general_embeds, args.webhook, batch_title="FlashSale")
 
-    total_sent = len(target_hits) + len(hits)
+    # Gửi bổ sung chức năng phụ nếu có sản phẩm đạt kỳ vọng
+    if target_hits and target_embeds:
+        print(f"\n▶ Đang gửi {len(target_hits)} sản phẩm đạt giá kỳ vọng (phụ) lên Discord...")
+        send_hits_to_discord(target_hits, target_embeds, args.webhook, batch_title="Mục tiêu")
+
+    total_sent = len(hits) + len(target_hits)
     print(f"\n🎉 Đã hoàn thành thông báo lên Discord (Tổng cộng {total_sent} lượt sản phẩm)!")
     return 0
 

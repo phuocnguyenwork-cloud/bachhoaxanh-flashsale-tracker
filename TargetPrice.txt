@@ -1,7 +1,9 @@
 # TargetPrice.txt — Danh sách ID sản phẩm và mức giá mong muốn (Target Price)
 #
+# Chức năng phụ: Quét thêm xem các sản phẩm bạn quan tâm có ca nào đạt giá mong muốn không.
+#
 # Cách dùng:
-# 1. Nhập ID sản phẩm và mức giá trần bạn mong muốn mua (giá <= mức này sẽ được thông báo)
+# 1. Nhập ID sản phẩm và mức giá trần bạn mong muốn mua (khi giá <= mức này sẽ được thông báo)
 # 2. Định dạng: <ID_SẢN_PHẨM> : <GIÁ_MONG_MUỐN>
 #    - Hỗ trợ phân cách bằng dấu hai chấm ':', dấu phẩy ',', hoặc khoảng trắng.
 #    - Hỗ trợ các định dạng số: 10000, 10.000, 10k, 100k, 1.5tr
@@ -10,6 +12,3 @@
 # Ví dụ:
 # 333450: 10.000
 # 283165: 150k
-
-333450: 10k
-230451: 3000
