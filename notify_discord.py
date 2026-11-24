@@ -23,11 +23,11 @@ import urllib.request
 from datetime import datetime, timezone, timedelta
 
 # ─── Cấu hình mặc định ───────────────────────────────────────────────────────
-DEFAULT_WEBHOOK = (
+DEFAULT_WEBHOOK = os.environ.get("DISCORD_WEBHOOK") or (
     "https://discord.com/api/webhooks/1572254460560801869/"
     "RuoaK1arL0AquKoBPq67_ukHMLiCpzDl9Ftkn2bmXjX6fCt61vSk7pNWiKiB9t-W0hQ-"
 )
-DEFAULT_THRESHOLD = 40          # % giảm tối thiểu
+DEFAULT_THRESHOLD = int(os.environ.get("FLASHSALE_THRESHOLD", "40"))  # % giảm tối thiểu
 BHX_BASE_URL = "https://www.bachhoaxanh.com"
 
 # Màu embed Discord theo mức giảm

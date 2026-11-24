@@ -110,3 +110,19 @@ Nếu bạn muốn theo dõi sản phẩm cụ thể và muốn biết **khi nà
    * Tìm chính xác **ca sale nào (thời gian nào)** có mức giá $\le$ mức bạn kỳ vọng.
    * In chi tiết trên Terminal và gửi Embed riêng nổi bật màu xanh lá lên Discord kèm nút bấm đặt mua nhanh.
 *(Nếu file này để trống, chương trình chỉ quét và thông báo Flash Sale chính bình thường)*.
+
+---
+
+### 5. Chạy tự động 24/7 trên Đám mây (GitHub Actions)
+Bạn không cần bật máy tính! GitHub Actions sẽ tự động chạy ngầm trên máy chủ GitHub theo lịch trước mỗi ca Flash Sale (07:55, 09:55, 11:55, 13:55, 15:55, 17:55, 19:55, 21:55) và gửi thông báo vào Discord của bạn.
+
+#### Cấu hình Secret (Khuyên dùng để bảo mật Webhook):
+1. Vào repo GitHub của bạn: `Settings` -> `Secrets and variables` -> `Actions`.
+2. Bấm **New repository secret**.
+3. Điền:
+   - **Name**: `DISCORD_WEBHOOK`
+   - **Secret**: Dán URL Webhook Discord của bạn.
+4. Bấm **Add secret**.
+
+#### Kích hoạt thủ công từ điện thoại hoặc máy tính:
+- Vào tab **Actions** trên GitHub -> Chọn workflow **BHX FlashSale Tracker** -> Bấm **Run workflow**. Tool sẽ lập tức chạy quét và gửi kết quả về Discord mà không cần mở terminal!

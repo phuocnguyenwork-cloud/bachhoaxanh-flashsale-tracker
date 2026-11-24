@@ -1,0 +1,52 @@
+name: BHX FlashSale Tracker
+
+on:
+  schedule:
+    # Chạy trước mỗi ca Flash Sale:
+    # 07:55, 09:55, 11:55, 13:55, 15:55, 17:55, 19:55, 21:55 (Giờ Việt Nam UTC+7)
+    # Tương ứng giờ UTC: 00:55, 02:55, 04:55, 06:55, 08:55, 10:55, 12:55, 14:55
+    - cron: '55 0,2,4,6,8,10,12,14 * * *'
+  workflow_dispatch: # Cho phép kích hoạt thủ công từ app/web GitHub bất cứ lúc nào
+    inputs:
+      threshold:
+        description: 'Ngưỡng giảm giá tối thiểu (%)'
+        required: false
+        default: '40'
+
+jobs:
+  track:
+    name: Quét Flash Sale và Gửi Discord
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout mã nguồn
+        uses: actions/checkout@v4
+
+      - name: Thiết lập Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Cài đặt thư viện
+        run: |
+          pip install -r requirements.txt
+
+      - name: Chạy quét Flash Sale & Gửi thông báo
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          INPUT_THRESHOLD: ${{ inputs.threshold || '40' }}
+        run: |
+          if [ -n "$DISCORD_WEBHOOK" ]; then
+            python notify_discord.py --fetch --threshold "$INPUT_THRESHOLD" --webhook "$DISCORD_WEBHOOK"
+          else
+            python notify_discord.py --fetch --threshold "$INPUT_THRESHOLD"
+          fi
+
+      - name: Lưu trữ dữ liệu JSON (Artifact)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flashsale-data
+          path: flashsale-*.json
+          retention-days: 1
