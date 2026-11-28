@@ -302,7 +302,7 @@ def state_label(state: str) -> str:
             "da_ket_thuc":  "🔴 Đã kết thúc"}.get(state, state)
 
 
-def build_embeds(hits: list[dict], fetched_at: str, threshold: int) -> list[dict]:
+def build_embeds(hits: list[dict], fetched_at: str, threshold: int, store_id=None) -> list[dict]:
     """Tạo danh sách embed Discord. Discord giới hạn 10 embed/message."""
     if not hits:
         return []
@@ -316,10 +316,11 @@ def build_embeds(hits: list[dict], fetched_at: str, threshold: int) -> list[dict
     except (TypeError, ValueError):
         ts = fetched_at or "?"
 
+    store_txt = f" · 🏪 Store: `{store_id}`" if store_id else ""
     embeds.append({
         "title": f"🔥 Flash Sale BHX — Giảm ≥{threshold}%",
         "description": (
-            f"**{len(hits)} sản phẩm** · 🕒 `{ts}`"
+            f"**{len(hits)} sản phẩm** · 🕒 `{ts}`{store_txt}"
         ),
         "color": 0xE74C3C,
     })
@@ -405,7 +406,7 @@ def group_target_hits(target_hits: list[dict]) -> list[dict]:
     return result
 
 
-def build_target_embeds(grouped_hits: list[dict], fetched_at: str) -> list[dict]:
+def build_target_embeds(grouped_hits: list[dict], fetched_at: str, store_id=None) -> list[dict]:
     """Tạo danh sách embed Discord cho các sản phẩm đạt giá kỳ vọng (gom đủ mọi ca trong ngày)."""
     if not grouped_hits:
         return []
@@ -417,6 +418,7 @@ def build_target_embeds(grouped_hits: list[dict], fetched_at: str) -> list[dict]
         ts = fetched_at or "?"
 
     total_slots = sum(len(p.get("_slots", [])) for p in grouped_hits)
+    store_line = f"\n🏪 Cửa hàng (StoreId): `{store_id}`" if store_id else ""
 
     embeds = [{
         "title": "🎯 Flash Sale BHX — Sản Phẩm Đạt Giá Kỳ Vọng!",
@@ -424,6 +426,7 @@ def build_target_embeds(grouped_hits: list[dict], fetched_at: str) -> list[dict]
             f"Phát hiện **{len(grouped_hits)} sản phẩm** (**{total_slots} khung giờ** trong ngày) "
             f"có giá bán ≤ mức mong muốn!\n"
             f"🕒 Cập nhật lúc: `{ts}`"
+            f"{store_line}"
         ),
         "color": 0x2ECC71,  # Màu xanh lá
     }]
@@ -873,8 +876,9 @@ def run_cycle(args, stop_before: datetime | None = None) -> int:
         return 0
 
     # ── Bước 4: build embeds ──────────────────────────────────────────────────
-    general_embeds = build_embeds(hits, fetched_at, args.threshold)
-    target_embeds = build_target_embeds(grouped_target_hits, fetched_at)
+    store_id = (data.get("context") or {}).get("StoreId") or args.store
+    general_embeds = build_embeds(hits, fetched_at, args.threshold, store_id=store_id)
+    target_embeds = build_target_embeds(grouped_target_hits, fetched_at, store_id=store_id)
 
     if args.dry_run:
         print("\n── DRY RUN: payload sẽ gửi Discord ──")
