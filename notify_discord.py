@@ -15,9 +15,14 @@ Tuỳ chọn:
   --province/--store/--ward  Truyền vào fetch khi dùng --fetch
 """
 import argparse
+import atexit
 import json
 import os
+import shutil
+import signal
+import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone, timedelta
@@ -28,6 +33,8 @@ DEFAULT_WEBHOOK = os.environ.get("DISCORD_WEBHOOK") or (
     "RuoaK1arL0AquKoBPq67_ukHMLiCpzDl9Ftkn2bmXjX6fCt61vSk7pNWiKiB9t-W0hQ-"
 )
 DEFAULT_THRESHOLD = int(os.environ.get("FLASHSALE_THRESHOLD", "40"))  # % giảm tối thiểu
+DEFAULT_ALARM = os.environ.get("BHX_ALARM", "").strip().lower() in ("1", "true", "yes", "on")
+ALARM_PID_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".alarm.pid")
 BHX_BASE_URL = "https://www.bachhoaxanh.com"
 
 # Màu embed Discord theo mức giảm
@@ -350,9 +357,51 @@ def build_embeds(hits: list[dict], fetched_at: str, threshold: int) -> list[dict
     return embeds
 
 
-def build_target_embeds(target_hits: list[dict], fetched_at: str) -> list[dict]:
-    """Tạo danh sách embed Discord cho các sản phẩm đạt mức giá kỳ vọng (Target Price)."""
-    if not target_hits:
+def group_target_hits(target_hits: list[dict]) -> list[dict]:
+    """Gom tất cả các khung giờ (ca sale) đạt giá kỳ vọng trong ngày theo từng sản phẩm."""
+    grouped: dict[str, dict] = {}
+    for hit in target_hits:
+        pid = str(hit.get("id", "")).strip()
+        if not pid:
+            continue
+        tl = hit.get("_timeline", {})
+        slot = {
+            "timelineId": tl.get("timelineId"),
+            "dateStart": tl.get("dateStart"),
+            "dateEnd": tl.get("dateEnd"),
+            "state": tl.get("state", ""),
+            "price": hit.get("price"),
+            "sysPrice": hit.get("sysPrice"),
+            "discountPercent": hit.get("discountPercent", 0),
+            "remainingQuantity": hit.get("remainingQuantity"),
+        }
+        if pid not in grouped:
+            grouped[pid] = {
+                **hit,
+                "_slots": [slot],
+            }
+        else:
+            entry = grouped[pid]
+            entry["_slots"].append(slot)
+            # Giữ mức giá tốt nhất (thấp nhất) để hiển thị tổng quan
+            if hit.get("price", float("inf")) < entry.get("price", float("inf")):
+                entry["price"] = hit.get("price")
+                entry["sysPrice"] = hit.get("sysPrice")
+                entry["discountPercent"] = hit.get("discountPercent", 0)
+
+    result = list(grouped.values())
+    for entry in result:
+        entry["_slots"].sort(key=lambda s: (s.get("dateStart") or "", s.get("timelineId") or 0))
+    result.sort(key=lambda e: (
+        e["_slots"][0].get("dateStart") or "",
+        e.get("price", 0),
+    ))
+    return result
+
+
+def build_target_embeds(grouped_hits: list[dict], fetched_at: str) -> list[dict]:
+    """Tạo danh sách embed Discord cho các sản phẩm đạt giá kỳ vọng (gom đủ mọi ca trong ngày)."""
+    if not grouped_hits:
         return []
 
     try:
@@ -361,45 +410,57 @@ def build_target_embeds(target_hits: list[dict], fetched_at: str) -> list[dict]:
     except (TypeError, ValueError):
         ts = fetched_at or "?"
 
+    total_slots = sum(len(p.get("_slots", [])) for p in grouped_hits)
+
     embeds = [{
         "title": "🎯 Flash Sale BHX — Sản Phẩm Đạt Giá Kỳ Vọng!",
         "description": (
-            f"Phát hiện **{len(target_hits)} thời điểm** có giá bán ≤ mức mong muốn!\n"
+            f"Phát hiện **{len(grouped_hits)} sản phẩm** (**{total_slots} khung giờ** trong ngày) "
+            f"có giá bán ≤ mức mong muốn!\n"
             f"🕒 Cập nhật lúc: `{ts}`"
         ),
         "color": 0x2ECC71,  # Màu xanh lá
     }]
 
-    for p in target_hits:
-        tl  = p.get("_timeline", {})
+    def _fmt_time(iso):
+        try:
+            return datetime.fromisoformat(iso).strftime("%H:%M")
+        except Exception:
+            return iso or "?"
+
+    for p in grouped_hits:
+        slots = p.get("_slots", [])
         pct = p.get("discountPercent", 0)
         url = p.get("url", "")
         full_url = BHX_BASE_URL + url if url.startswith("/") else url or BHX_BASE_URL
 
-        remaining = p.get("remainingQuantity")
-        stock_txt = f"**{remaining}** suất" if remaining is not None else "?"
-
-        def _fmt_time(iso):
-            try:
-                return datetime.fromisoformat(iso).strftime("%H:%M")
-            except Exception:
-                return iso or "?"
-        time_range = f"{_fmt_time(tl.get('dateStart'))}–{_fmt_time(tl.get('dateEnd'))}"
-
         pid = p.get("id")
         pid_txt = f"`{pid}`" if pid is not None else "?"
+
+        slot_lines = []
+        for s in slots:
+            time_range = f"{_fmt_time(s.get('dateStart'))}–{_fmt_time(s.get('dateEnd'))}"
+            tid = s.get("timelineId", "?")
+            rem = s.get("remainingQuantity")
+            stock_note = f" · còn **{rem}** suất" if rem is not None else ""
+            slot_lines.append(
+                f"• **{time_range}** (Ca {tid}): **{fmt_money(s.get('price'))}** "
+                f"(-{s.get('discountPercent', 0)}%) · {state_label(s.get('state', ''))}{stock_note}"
+            )
+
+        slots_text = "\n".join(slot_lines)
+        if len(slots_text) > 1000:
+            slots_text = slots_text[:995] + "\n..."
 
         embeds.append({
             "title": f"🎯 {p.get('name', 'Sản phẩm')}",
             "url":   full_url,
             "color": 0x2ECC71,
             "fields": [
-                {"name": "🎯 Giá kỳ vọng",  "value": f"≤ **{fmt_money(p.get('target_price'))}**", "inline": True},
-                {"name": "💰 Giá thực tế",   "value": f"**{fmt_money(p.get('price'))}**",          "inline": True},
-                {"name": "📉 Giảm",          "value": f"**{pct}%** (gốc {fmt_money(p.get('sysPrice'))})", "inline": True},
-                {"name": "⏰ Khi nào (Ca sale)", "value": f"{time_range} (Ca {tl.get('timelineId', '?')}) · {state_label(tl.get('state', ''))}", "inline": True},
-                {"name": "📦 Số suất",      "value": stock_txt,                                   "inline": True},
-                {"name": "🆔 ID",           "value": pid_txt,                                     "inline": True},
+                {"name": "🎯 Giá kỳ vọng", "value": f"≤ **{fmt_money(p.get('target_price'))}**", "inline": True},
+                {"name": "💰 Giá tốt nhất", "value": f"**{fmt_money(p.get('price'))}** (-{pct}%)", "inline": True},
+                {"name": "🆔 ID",           "value": pid_txt,                                       "inline": True},
+                {"name": f"⏰ Các ca đạt giá trong ngày ({len(slots)} ca)", "value": slots_text,   "inline": False},
             ],
         })
 
@@ -482,6 +543,213 @@ def send_hits_to_discord(hits: list[dict], embeds: list[dict], webhook_url: str,
     return True
 
 
+def build_alarm_schedule(target_hits: list[dict], now: datetime | None = None, lead_minutes: int = 1) -> list[dict]:
+    """Lập lịch báo thức trước `lead_minutes` phút cho mọi ca sắp diễn ra đạt giá kỳ vọng."""
+    if not target_hits:
+        return []
+    if now is None:
+        now = datetime.now().astimezone()
+
+    by_slot: dict[tuple, dict] = {}
+    for hit in target_hits:
+        tl = hit.get("_timeline", {})
+        date_start = tl.get("dateStart")
+        date_end = tl.get("dateEnd")
+        if not date_start:
+            continue
+        try:
+            dt_start = datetime.fromisoformat(date_start)
+        except Exception:
+            continue
+
+        ref_now = datetime.now(dt_start.tzinfo) if dt_start.tzinfo else now
+        if dt_start <= ref_now:
+            # Ca đã bắt đầu rồi thì không cần đặt báo thức trước giờ mở bán nữa
+            continue
+
+        alarm_time = dt_start - timedelta(minutes=lead_minutes)
+        key = (tl.get("timelineId"), date_start, date_end)
+        if key not in by_slot:
+            by_slot[key] = {
+                "timelineId": tl.get("timelineId"),
+                "dateStart": date_start,
+                "dateEnd": date_end,
+                "dt_start": dt_start,
+                "alarm_time": alarm_time,
+                "products": [],
+            }
+        by_slot[key]["products"].append(hit)
+
+    events = list(by_slot.values())
+    events.sort(key=lambda e: e["alarm_time"])
+    return events
+
+
+def trigger_local_alarm(title: str, body: str):
+    """Phát thông báo/chuông cục bộ nếu chạy trên Termux Android hoặc Windows."""
+    if shutil.which("termux-notification"):
+        try:
+            subprocess.run(
+                [
+                    "termux-notification",
+                    "--id", "bhx_flashsale_alarm",
+                    "--title", title,
+                    "--content", body,
+                    "--priority", "max",
+                    "--sound",
+                ],
+                timeout=5,
+                capture_output=True,
+            )
+        except Exception:
+            pass
+    if shutil.which("termux-vibrate"):
+        try:
+            subprocess.run(["termux-vibrate", "-d", "1000"], timeout=5, capture_output=True)
+        except Exception:
+            pass
+    if sys.platform == "win32":
+        try:
+            import winsound
+            for _ in range(3):
+                winsound.Beep(1200, 250)
+        except Exception:
+            print("\a", end="", flush=True)
+    else:
+        print("\a", end="", flush=True)
+
+
+def send_alarm_discord(webhook_url: str, event: dict, lead_minutes: int = 1) -> tuple[bool, str]:
+    """Gửi tin nhắn báo thức khẩn lên Discord kèm nút đặt mua."""
+    dt_start: datetime = event["dt_start"]
+    start_str = dt_start.strftime("%H:%M")
+    try:
+        end_str = datetime.fromisoformat(event["dateEnd"]).strftime("%H:%M")
+    except Exception:
+        end_str = "?"
+
+    tid = event.get("timelineId", "?")
+    products = event.get("products", [])
+
+    lines = []
+    buttons = []
+    for p in products[:10]:
+        url = p.get("url", "")
+        full_url = BHX_BASE_URL + url if url.startswith("/") else url or BHX_BASE_URL
+        lines.append(
+            f"• **{p.get('name', 'Sản phẩm')}** — **{fmt_money(p.get('price'))}** "
+            f"(kỳ vọng ≤ {fmt_money(p.get('target_price'))}, -{p.get('discountPercent', 0)}%)"
+        )
+        raw_name = p.get("name", "Sản phẩm")
+        short_name = (raw_name[:26] + "...") if len(raw_name) > 28 else raw_name
+        buttons.append({
+            "type": 2,
+            "style": 5,
+            "label": f"🛒 Mua: {short_name}",
+            "url": full_url,
+        })
+
+    embed = {
+        "title": f"⏰ BÁO THỨC FLASH SALE — Ca {tid} ({start_str}–{end_str})",
+        "description": (
+            f"Chỉ còn **{lead_minutes} phút** nữa (lúc **{start_str}**) sẽ mở bán:\n\n"
+            + "\n".join(lines)
+        ),
+        "color": 0xE74C3C,
+    }
+
+    action_rows = []
+    for i in range(0, min(len(buttons), 25), 5):
+        action_rows.append({"type": 1, "components": buttons[i:i + 5]})
+
+    target_webhook = webhook_url
+    if "?" not in target_webhook:
+        target_webhook += "?wait=true"
+    elif "wait=true" not in target_webhook:
+        target_webhook += "&wait=true"
+
+    content = f"@everyone ⏰ **BÁO THỨC!** Còn **{lead_minutes} phút** nữa mở bán Flash Sale Ca {tid} ({start_str})!"
+    return send_to_discord(target_webhook, [embed], components=action_rows, content=content)
+
+
+def acquire_alarm_pidfile():
+    """Đảm bảo chỉ có 1 tiến trình báo thức chạy nền tại một thời điểm."""
+    my_pid = os.getpid()
+    if os.path.exists(ALARM_PID_FILE):
+        try:
+            with open(ALARM_PID_FILE, "r", encoding="utf-8") as f:
+                old_pid = int(f.read().strip())
+            if old_pid and old_pid != my_pid:
+                os.kill(old_pid, signal.SIGTERM)
+                time.sleep(0.3)
+        except Exception:
+            pass
+    try:
+        with open(ALARM_PID_FILE, "w", encoding="utf-8") as f:
+            f.write(str(my_pid))
+    except Exception:
+        pass
+
+    def _cleanup():
+        try:
+            if os.path.exists(ALARM_PID_FILE):
+                with open(ALARM_PID_FILE, "r", encoding="utf-8") as f:
+                    pid_in_file = int(f.read().strip())
+                if pid_in_file == my_pid:
+                    os.remove(ALARM_PID_FILE)
+        except Exception:
+            pass
+
+    atexit.register(_cleanup)
+
+
+def run_alarm_loop(events: list[dict], webhook_url: str, dry_run: bool = False, lead_minutes: int = 1):
+    """Chờ đến trước mỗi khung giờ `lead_minutes` phút và phát báo thức."""
+    if not events:
+        print("\n⏰ [Báo thức] Không có ca sắp diễn ra nào đạt giá kỳ vọng để đặt báo thức.")
+        return
+
+    print(f"\n⏰ [Báo thức] Đã lên lịch {len(events)} mốc báo thức (trước {lead_minutes} phút):")
+    for ev in events:
+        names = ", ".join(p.get("name", "?") for p in ev["products"])
+        print(
+            f"  • Báo lúc {ev['alarm_time'].strftime('%H:%M:%S %d/%m')} "
+            f"(trước Ca {ev['timelineId']}: {ev['dt_start'].strftime('%H:%M')}) -> {names}"
+        )
+
+    if dry_run:
+        print("  (DRY RUN: bỏ qua bước chờ ngủ đến giờ báo thức)")
+        return
+
+    acquire_alarm_pidfile()
+    print("▶ Đang giữ tiến trình chạy nền để canh giờ báo thức... (Ctrl+C để dừng)")
+
+    for ev in events:
+        dt_start: datetime = ev["dt_start"]
+        alarm_time: datetime = ev["alarm_time"]
+        now = datetime.now(dt_start.tzinfo) if dt_start.tzinfo else datetime.now().astimezone()
+        wait_secs = (alarm_time - now).total_seconds()
+
+        if wait_secs > 0:
+            print(f"  ⏳ Đang chờ {int(wait_secs)} giây tới {alarm_time.strftime('%H:%M:%S')} (Ca {ev['timelineId']})...")
+            time.sleep(wait_secs)
+
+        # Kiểm tra lại xem ca chưa trôi qua quá lâu
+        now_after = datetime.now(dt_start.tzinfo) if dt_start.tzinfo else datetime.now().astimezone()
+        if now_after >= dt_start + timedelta(minutes=2):
+            continue
+
+        names = ", ".join(p.get("name", "?") for p in ev["products"])
+        print(f"  🔔 BÁO THỨC! Ca {ev['timelineId']} ({dt_start.strftime('%H:%M')}) sắp bắt đầu: {names}")
+        trigger_local_alarm(
+            f"⏰ Báo thức Flash Sale Ca {ev['timelineId']} ({dt_start.strftime('%H:%M')})",
+            f"Còn {lead_minutes} phút nữa mở bán: {names}",
+        )
+        ok, msg = send_alarm_discord(webhook_url, ev, lead_minutes=lead_minutes)
+        status = "✅" if ok else "❌"
+        print(f"  [Báo thức Discord] Ca {ev['timelineId']}: {status} {msg}")
+
+
 def run_fetch(args) -> str:
     """Chạy fetch_flashsale.py như subprocess, trả path file JSON."""
     import subprocess, tempfile, os
@@ -519,6 +787,8 @@ def main():
                     help="File chứa danh sách ID sản phẩm không muốn gửi (mặc định IgnoreProd.txt)")
     ap.add_argument("--target-file", default="TargetPrice.txt",
                     help="File chứa danh sách ID sản phẩm và giá kỳ vọng (mặc định TargetPrice.txt)")
+    ap.add_argument("--alarm", action="store_true", default=DEFAULT_ALARM,
+                    help="Bật chế độ báo thức trước 1 phút cho các ca đạt giá kỳ vọng (hoặc đặt BHX_ALARM=1)")
     # Các tham số khi --fetch
     ap.add_argument("--province",  default="1027")
     ap.add_argument("--store",     default="8916")
@@ -561,28 +831,32 @@ def main():
 
     # ── Bước 3 (CHỨC NĂNG PHỤ): Kiểm tra giá kỳ vọng (Target Price) ──────────
     target_hits = []
+    grouped_target_hits = []
     if target_prices:
         target_hits = check_target_prices(data, target_prices, ignored_ids=ignored_ids)
-        if target_hits:
-            print(f"\n🎯 [Chức năng phụ] TÌM THẤY {len(target_hits)} THỜI ĐIỂM ĐẠT GIÁ KỲ VỌNG:")
-            for th in target_hits:
-                tl = th.get("_timeline", {})
-                t_start = (tl.get('dateStart') or '')[11:16]
-                t_end = (tl.get('dateEnd') or '')[11:16]
-                t_range = f"{t_start}–{t_end}" if t_start and t_end else "Trong ngày"
-                print(f"  • [ID: {th.get('id')}] {th.get('name')}")
-                print(f"    -> Giá sale: {fmt_money(th.get('price'))} (Kỳ vọng: ≤ {fmt_money(th.get('target_price'))}, giảm {th.get('discountPercent')}%)")
-                print(f"    -> Khi nào: Ca {tl.get('timelineId', '?')} ({t_range}) · {state_label(tl.get('state', ''))}")
+        grouped_target_hits = group_target_hits(target_hits)
+        if grouped_target_hits:
+            print(f"\n🎯 [Chức năng phụ] TÌM THẤY {len(grouped_target_hits)} SẢN PHẨM ({len(target_hits)} KHUNG GIỜ) ĐẠT GIÁ KỲ VỌNG:")
+            for gh in grouped_target_hits:
+                print(f"  • [ID: {gh.get('id')}] {gh.get('name')} (Kỳ vọng: ≤ {fmt_money(gh.get('target_price'))})")
+                for s in gh.get("_slots", []):
+                    t_start = (s.get('dateStart') or '')[11:16]
+                    t_end = (s.get('dateEnd') or '')[11:16]
+                    t_range = f"{t_start}–{t_end}" if t_start and t_end else "Trong ngày"
+                    print(
+                        f"    -> Ca {s.get('timelineId', '?')} ({t_range}): "
+                        f"{fmt_money(s.get('price'))} (-{s.get('discountPercent', 0)}%) · {state_label(s.get('state', ''))}"
+                    )
         else:
             print(f"\nℹ [Chức năng phụ] Rà soát {len(target_prices)} sản phẩm theo dõi: Chưa có ca nào đạt giá kỳ vọng.")
 
-    if not hits and not target_hits:
+    if not hits and not grouped_target_hits:
         print("\nKhông có sản phẩm nào đủ điều kiện — không gửi Discord.")
         return 0
 
     # ── Bước 4: build embeds ──────────────────────────────────────────────────
     general_embeds = build_embeds(hits, fetched_at, args.threshold)
-    target_embeds = build_target_embeds(target_hits, fetched_at)
+    target_embeds = build_target_embeds(grouped_target_hits, fetched_at)
 
     if args.dry_run:
         print("\n── DRY RUN: payload sẽ gửi Discord ──")
@@ -592,6 +866,9 @@ def main():
         if target_embeds:
             print("\n--- 🎯 Embeds Mục Tiêu Đạt Giá Kỳ Vọng (Phụ) ---")
             print(json.dumps({"embeds": target_embeds}, ensure_ascii=False, indent=2))
+        if args.alarm and target_hits:
+            alarm_events = build_alarm_schedule(target_hits)
+            run_alarm_loop(alarm_events, args.webhook, dry_run=True)
         return 0
 
     # ── Bước 5: gửi Discord ───────────────────────────────────────────────────
@@ -601,12 +878,18 @@ def main():
         send_hits_to_discord(hits, general_embeds, args.webhook, batch_title="FlashSale")
 
     # Gửi bổ sung chức năng phụ nếu có sản phẩm đạt kỳ vọng
-    if target_hits and target_embeds:
-        print(f"\n▶ Đang gửi {len(target_hits)} sản phẩm đạt giá kỳ vọng (phụ) lên Discord...")
-        send_hits_to_discord(target_hits, target_embeds, args.webhook, batch_title="Mục tiêu")
+    if grouped_target_hits and target_embeds:
+        print(f"\n▶ Đang gửi {len(grouped_target_hits)} sản phẩm đạt giá kỳ vọng ({len(target_hits)} ca) lên Discord...")
+        send_hits_to_discord(grouped_target_hits, target_embeds, args.webhook, batch_title="Mục tiêu")
 
-    total_sent = len(hits) + len(target_hits)
+    total_sent = len(hits) + len(grouped_target_hits)
     print(f"\n🎉 Đã hoàn thành thông báo lên Discord (Tổng cộng {total_sent} lượt sản phẩm)!")
+
+    # ── Bước 6 (Tuỳ chọn): Báo thức trước 1 phút cho các ca đạt giá kỳ vọng ──
+    if args.alarm and target_hits:
+        alarm_events = build_alarm_schedule(target_hits)
+        run_alarm_loop(alarm_events, args.webhook, dry_run=False)
+
     return 0
 
 

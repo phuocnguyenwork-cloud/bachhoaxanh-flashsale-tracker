@@ -14,6 +14,7 @@ flashsale*.json
 # Temporary files
 *.tmp
 *.log
+.alarm.pid
 
 # IDE & Editor
 .vscode/

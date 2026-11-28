@@ -107,8 +107,12 @@ Nếu bạn muốn theo dõi sản phẩm cụ thể và muốn biết **khi nà
    ```
 3. Khi chạy lệnh fetch, chương trình sẽ:
    * Quét **mọi khung giờ** và **tất cả mức giá có thể có** (tất cả quy cách đóng gói, trọng lượng...) của sản phẩm đó.
-   * Tìm chính xác **ca sale nào (thời gian nào)** có mức giá $\le$ mức bạn kỳ vọng.
-   * In chi tiết trên Terminal và gửi Embed riêng nổi bật màu xanh lá lên Discord kèm nút bấm đặt mua nhanh.
+   * Gom và hiển thị **đầy đủ mọi ca sale trong ngày** có mức giá $\le$ mức bạn kỳ vọng trong một thông báo duy nhất trên Discord (kèm nút bấm đặt mua nhanh).
+   * In chi tiết từng ca trên Terminal.
+   * **Báo thức trước 1 phút (tuỳ chọn `--alarm`)**: Khi bạn bật cờ `--alarm` (hoặc biến môi trường `BHX_ALARM=1`), hệ thống sẽ tự động canh giờ và gửi báo thức khẩn lên Discord (`@everyone`) trước **1 phút** khi mỗi ca đạt giá kỳ vọng bắt đầu (đồng thời phát thông báo/rung nếu chạy trên Termux Android hoặc bíp trên Windows):
+     ```powershell
+     python notify_discord.py --fetch --alarm
+     ```
 *(Nếu file này để trống, chương trình chỉ quét và thông báo Flash Sale chính bình thường)*.
 
 ---

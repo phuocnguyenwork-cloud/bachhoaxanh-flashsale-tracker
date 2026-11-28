@@ -327,12 +327,10 @@ def main():
     for t in timelines:
         state = classify(t)
         t["_state"] = state
-        if state == "da_ket_thuc":
-            continue  # Bỏ qua các ca đã kết thúc
         if args.timeline is not None:
             if t.get("timelineId") == args.timeline:
                 selected.append(t)
-        elif state in ("dang_dien_ra", "sap_dien_ra") or args.all:
+        elif args.all or state in ("dang_dien_ra", "sap_dien_ra"):
             selected.append(t)
     if not selected:
         print("Không có ca nào phù hợp để lấy.")
