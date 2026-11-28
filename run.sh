@@ -9,7 +9,14 @@ if command -v termux-wake-lock >/dev/null 2>&1; then
 fi
 
 # Tự động cập nhật code hoặc danh sách IgnoreProd.txt / TargetPrice.txt mới nhất từ GitHub nếu có
-git pull --rebase >/dev/null 2>&1
+# Dùng git stash để tránh lỗi "unstaged changes" khi có file thay đổi cục bộ (JSON, txt...)
+if git diff --quiet 2>/dev/null; then
+    git pull --rebase >/dev/null 2>&1
+else
+    git stash --quiet 2>/dev/null
+    git pull --rebase >/dev/null 2>&1
+    git stash pop --quiet 2>/dev/null
+fi
 
 # Chạy tool quét và gửi Discord (truyền thêm --alarm hoặc đặt BHX_ALARM=1 để bật báo thức trước 1 phút)
 python notify_discord.py --fetch "$@"
