@@ -34,6 +34,12 @@ DEFAULT_WEBHOOK = os.environ.get("DISCORD_WEBHOOK") or (
 )
 DEFAULT_THRESHOLD = int(os.environ.get("FLASHSALE_THRESHOLD", "40"))  # % giảm tối thiểu
 DEFAULT_ALARM = os.environ.get("BHX_ALARM", "").strip().lower() in ("1", "true", "yes", "on")
+DEFAULT_ALARM_LEAD = float(os.environ.get("BHX_ALARM_LEAD", "1"))
+DEFAULT_ALARM_MENTION = os.environ.get("BHX_ALARM_MENTION", "@everyone")
+DEFAULT_NO_LOCAL_ALARM = os.environ.get("BHX_NO_LOCAL_ALARM", "").strip().lower() in ("1", "true", "yes", "on")
+DEFAULT_DAEMON = os.environ.get("BHX_DAEMON", "").strip().lower() in ("1", "true", "yes", "on")
+DEFAULT_DAILY_AT = os.environ.get("BHX_DAILY_AT", "06:00")
+DEFAULT_RESCAN_HOURS = float(os.environ.get("BHX_RESCAN_HOURS", "0"))
 ALARM_PID_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".alarm.pid")
 BHX_BASE_URL = "https://www.bachhoaxanh.com"
 
@@ -543,7 +549,7 @@ def send_hits_to_discord(hits: list[dict], embeds: list[dict], webhook_url: str,
     return True
 
 
-def build_alarm_schedule(target_hits: list[dict], now: datetime | None = None, lead_minutes: int = 1) -> list[dict]:
+def build_alarm_schedule(target_hits: list[dict], now: datetime | None = None, lead_minutes: float = 1) -> list[dict]:
     """Lập lịch báo thức trước `lead_minutes` phút cho mọi ca sắp diễn ra đạt giá kỳ vọng."""
     if not target_hits:
         return []
@@ -619,7 +625,12 @@ def trigger_local_alarm(title: str, body: str):
         print("\a", end="", flush=True)
 
 
-def send_alarm_discord(webhook_url: str, event: dict, lead_minutes: int = 1) -> tuple[bool, str]:
+def send_alarm_discord(
+    webhook_url: str,
+    event: dict,
+    lead_minutes: float = 1,
+    mention: str = "@everyone",
+) -> tuple[bool, str]:
     """Gửi tin nhắn báo thức khẩn lên Discord kèm nút đặt mua."""
     dt_start: datetime = event["dt_start"]
     start_str = dt_start.strftime("%H:%M")
@@ -630,6 +641,7 @@ def send_alarm_discord(webhook_url: str, event: dict, lead_minutes: int = 1) -> 
 
     tid = event.get("timelineId", "?")
     products = event.get("products", [])
+    lead_txt = f"{int(lead_minutes)}" if float(lead_minutes).is_integer() else f"{lead_minutes:g}"
 
     lines = []
     buttons = []
@@ -652,7 +664,7 @@ def send_alarm_discord(webhook_url: str, event: dict, lead_minutes: int = 1) -> 
     embed = {
         "title": f"⏰ BÁO THỨC FLASH SALE — Ca {tid} ({start_str}–{end_str})",
         "description": (
-            f"Chỉ còn **{lead_minutes} phút** nữa (lúc **{start_str}**) sẽ mở bán:\n\n"
+            f"Chỉ còn **{lead_txt} phút** nữa (lúc **{start_str}**) sẽ mở bán:\n\n"
             + "\n".join(lines)
         ),
         "color": 0xE74C3C,
@@ -668,7 +680,8 @@ def send_alarm_discord(webhook_url: str, event: dict, lead_minutes: int = 1) -> 
     elif "wait=true" not in target_webhook:
         target_webhook += "&wait=true"
 
-    content = f"@everyone ⏰ **BÁO THỨC!** Còn **{lead_minutes} phút** nữa mở bán Flash Sale Ca {tid} ({start_str})!"
+    mention_prefix = "" if not mention or mention.strip().lower() == "none" else f"{mention.strip()} "
+    content = f"{mention_prefix}⏰ **BÁO THỨC!** Còn **{lead_txt} phút** nữa mở bán Flash Sale Ca {tid} ({start_str})!"
     return send_to_discord(target_webhook, [embed], components=action_rows, content=content)
 
 
@@ -703,13 +716,22 @@ def acquire_alarm_pidfile():
     atexit.register(_cleanup)
 
 
-def run_alarm_loop(events: list[dict], webhook_url: str, dry_run: bool = False, lead_minutes: int = 1):
+def run_alarm_loop(
+    events: list[dict],
+    webhook_url: str,
+    dry_run: bool = False,
+    lead_minutes: float = 1,
+    mention: str = "@everyone",
+    local_alarm: bool = True,
+    stop_before: datetime | None = None,
+):
     """Chờ đến trước mỗi khung giờ `lead_minutes` phút và phát báo thức."""
+    lead_txt = f"{int(lead_minutes)}" if float(lead_minutes).is_integer() else f"{lead_minutes:g}"
     if not events:
         print("\n⏰ [Báo thức] Không có ca sắp diễn ra nào đạt giá kỳ vọng để đặt báo thức.")
         return
 
-    print(f"\n⏰ [Báo thức] Đã lên lịch {len(events)} mốc báo thức (trước {lead_minutes} phút):")
+    print(f"\n⏰ [Báo thức] Đã lên lịch {len(events)} mốc báo thức (trước {lead_txt} phút):")
     for ev in events:
         names = ", ".join(p.get("name", "?") for p in ev["products"])
         print(
@@ -727,6 +749,9 @@ def run_alarm_loop(events: list[dict], webhook_url: str, dry_run: bool = False, 
     for ev in events:
         dt_start: datetime = ev["dt_start"]
         alarm_time: datetime = ev["alarm_time"]
+        if stop_before is not None and alarm_time >= stop_before:
+            # Đã tới lúc quét lại theo lịch --rescan-hours / --daily-at
+            break
         now = datetime.now(dt_start.tzinfo) if dt_start.tzinfo else datetime.now().astimezone()
         wait_secs = (alarm_time - now).total_seconds()
 
@@ -741,13 +766,32 @@ def run_alarm_loop(events: list[dict], webhook_url: str, dry_run: bool = False, 
 
         names = ", ".join(p.get("name", "?") for p in ev["products"])
         print(f"  🔔 BÁO THỨC! Ca {ev['timelineId']} ({dt_start.strftime('%H:%M')}) sắp bắt đầu: {names}")
-        trigger_local_alarm(
-            f"⏰ Báo thức Flash Sale Ca {ev['timelineId']} ({dt_start.strftime('%H:%M')})",
-            f"Còn {lead_minutes} phút nữa mở bán: {names}",
-        )
-        ok, msg = send_alarm_discord(webhook_url, ev, lead_minutes=lead_minutes)
+        if local_alarm:
+            trigger_local_alarm(
+                f"⏰ Báo thức Flash Sale Ca {ev['timelineId']} ({dt_start.strftime('%H:%M')})",
+                f"Còn {lead_txt} phút nữa mở bán: {names}",
+            )
+        ok, msg = send_alarm_discord(webhook_url, ev, lead_minutes=lead_minutes, mention=mention)
         status = "✅" if ok else "❌"
         print(f"  [Báo thức Discord] Ca {ev['timelineId']}: {status} {msg}")
+
+
+def next_daemon_wakeup(daily_at: str = "06:00", rescan_hours: float = 0) -> datetime:
+    """Tính thời điểm quét tiếp theo cho chế độ chạy vĩnh viễn (--daemon)."""
+    now = datetime.now().astimezone()
+    try:
+        hh, mm = [int(x) for x in daily_at.strip().split(":", 1)]
+    except Exception:
+        hh, mm = 6, 0
+    candidate = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    if candidate <= now + timedelta(seconds=30):
+        candidate += timedelta(days=1)
+
+    if rescan_hours and rescan_hours > 0:
+        rescan_dt = now + timedelta(hours=rescan_hours)
+        if rescan_dt < candidate:
+            return rescan_dt
+    return candidate
 
 
 def run_fetch(args) -> str:
@@ -771,32 +815,7 @@ def run_fetch(args) -> str:
     return out
 
 
-def main():
-    ap = argparse.ArgumentParser(description="Lọc flash sale BHX và gửi Discord")
-    ap.add_argument("json_file", nargs="?",
-                    help="File JSON từ fetch_flashsale.py (bỏ qua nếu dùng --fetch)")
-    ap.add_argument("--fetch",   action="store_true",
-                    help="Chạy fetch_flashsale.py trước rồi mới lọc")
-    ap.add_argument("--threshold", type=int, default=DEFAULT_THRESHOLD,
-                    help=f"Ngưỡng %% giảm tối thiểu (mặc định {DEFAULT_THRESHOLD})")
-    ap.add_argument("--webhook", default=DEFAULT_WEBHOOK,
-                    help="Discord webhook URL")
-    ap.add_argument("--dry-run", action="store_true",
-                    help="In ra embed JSON mà không gửi Discord")
-    ap.add_argument("--ignore-file", default="IgnoreProd.txt",
-                    help="File chứa danh sách ID sản phẩm không muốn gửi (mặc định IgnoreProd.txt)")
-    ap.add_argument("--target-file", default="TargetPrice.txt",
-                    help="File chứa danh sách ID sản phẩm và giá kỳ vọng (mặc định TargetPrice.txt)")
-    ap.add_argument("--alarm", action="store_true", default=DEFAULT_ALARM,
-                    help="Bật chế độ báo thức trước 1 phút cho các ca đạt giá kỳ vọng (hoặc đặt BHX_ALARM=1)")
-    # Các tham số khi --fetch
-    ap.add_argument("--province",  default="1027")
-    ap.add_argument("--store",     default="8916")
-    ap.add_argument("--ward",      default="100731")
-    ap.add_argument("--page-size", type=int, default=0)
-    ap.add_argument("--out",       help="Tên file JSON khi --fetch")
-    args = ap.parse_args()
-
+def run_cycle(args, stop_before: datetime | None = None) -> int:
     # ── Đọc danh sách ID bỏ qua nếu có ───────────────────────────────────────
     ignored_ids = load_ignored_ids(args.ignore_file)
     if ignored_ids:
@@ -813,7 +832,7 @@ def main():
     elif args.json_file:
         json_path = args.json_file
     else:
-        ap.error("Cần cung cấp file JSON hoặc dùng --fetch")
+        raise ValueError("Cần cung cấp file JSON hoặc dùng --fetch")
 
     with open(json_path, encoding="utf-8") as f:
         data = json.load(f)
@@ -824,7 +843,6 @@ def main():
 
     print(f"\n🔥 [Chức năng chính] Tìm thấy {len(hits)} sản phẩm Flash Sale giảm ≥{args.threshold}%:")
     for p in hits:
-        tl = p.get("_timeline", {})
         print(f"  [ID: {p.get('id')}] [{p.get('discountPercent'):3d}%] {p.get('name')} "
               f"| {fmt_money(p.get('price'))} (gốc {fmt_money(p.get('sysPrice'))}) "
               f"| còn {p.get('remainingQuantity')} suất")
@@ -867,17 +885,19 @@ def main():
             print("\n--- 🎯 Embeds Mục Tiêu Đạt Giá Kỳ Vọng (Phụ) ---")
             print(json.dumps({"embeds": target_embeds}, ensure_ascii=False, indent=2))
         if args.alarm and target_hits:
-            alarm_events = build_alarm_schedule(target_hits)
-            run_alarm_loop(alarm_events, args.webhook, dry_run=True)
+            alarm_events = build_alarm_schedule(target_hits, lead_minutes=args.alarm_lead)
+            run_alarm_loop(
+                alarm_events, args.webhook, dry_run=True,
+                lead_minutes=args.alarm_lead, mention=args.alarm_mention,
+                local_alarm=not args.no_local_alarm,
+            )
         return 0
 
     # ── Bước 5: gửi Discord ───────────────────────────────────────────────────
-    # Ưu tiên gửi chức năng chính: Flash Sale giảm sâu
     if hits and general_embeds:
         print(f"\n▶ Đang gửi {len(hits)} sản phẩm Flash Sale chính lên Discord...")
         send_hits_to_discord(hits, general_embeds, args.webhook, batch_title="FlashSale")
 
-    # Gửi bổ sung chức năng phụ nếu có sản phẩm đạt kỳ vọng
     if grouped_target_hits and target_embeds:
         print(f"\n▶ Đang gửi {len(grouped_target_hits)} sản phẩm đạt giá kỳ vọng ({len(target_hits)} ca) lên Discord...")
         send_hits_to_discord(grouped_target_hits, target_embeds, args.webhook, batch_title="Mục tiêu")
@@ -885,12 +905,87 @@ def main():
     total_sent = len(hits) + len(grouped_target_hits)
     print(f"\n🎉 Đã hoàn thành thông báo lên Discord (Tổng cộng {total_sent} lượt sản phẩm)!")
 
-    # ── Bước 6 (Tuỳ chọn): Báo thức trước 1 phút cho các ca đạt giá kỳ vọng ──
+    # ── Bước 6 (Tuỳ chọn): Báo thức trước N phút cho các ca đạt giá kỳ vọng ──
     if args.alarm and target_hits:
-        alarm_events = build_alarm_schedule(target_hits)
-        run_alarm_loop(alarm_events, args.webhook, dry_run=False)
+        alarm_events = build_alarm_schedule(target_hits, lead_minutes=args.alarm_lead)
+        run_alarm_loop(
+            alarm_events, args.webhook, dry_run=False,
+            lead_minutes=args.alarm_lead, mention=args.alarm_mention,
+            local_alarm=not args.no_local_alarm, stop_before=stop_before,
+        )
 
     return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Lọc flash sale BHX và gửi Discord")
+    ap.add_argument("json_file", nargs="?",
+                    help="File JSON từ fetch_flashsale.py (bỏ qua nếu dùng --fetch)")
+    ap.add_argument("--fetch",   action="store_true",
+                    help="Chạy fetch_flashsale.py trước rồi mới lọc")
+    ap.add_argument("--threshold", type=int, default=DEFAULT_THRESHOLD,
+                    help=f"Ngưỡng %% giảm tối thiểu (mặc định {DEFAULT_THRESHOLD})")
+    ap.add_argument("--webhook", default=DEFAULT_WEBHOOK,
+                    help="Discord webhook URL")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="In ra embed JSON mà không gửi Discord")
+    ap.add_argument("--ignore-file", default="IgnoreProd.txt",
+                    help="File chứa danh sách ID sản phẩm không muốn gửi (mặc định IgnoreProd.txt)")
+    ap.add_argument("--target-file", default="TargetPrice.txt",
+                    help="File chứa danh sách ID sản phẩm và giá kỳ vọng (mặc định TargetPrice.txt)")
+    ap.add_argument("--alarm", action="store_true", default=DEFAULT_ALARM,
+                    help="Bật chế độ báo thức cho các ca đạt giá kỳ vọng (hoặc đặt BHX_ALARM=1)")
+    ap.add_argument("--alarm-lead", type=float, default=DEFAULT_ALARM_LEAD,
+                    help="Báo thức trước giờ mở bán bao nhiêu phút (mặc định 1, hoặc BHX_ALARM_LEAD)")
+    ap.add_argument("--alarm-mention", default=DEFAULT_ALARM_MENTION,
+                    help="Nội dung tag Discord khi báo thức (mặc định @everyone, hoặc none để tắt)")
+    ap.add_argument("--no-local-alarm", action="store_true", default=DEFAULT_NO_LOCAL_ALARM,
+                    help="Tắt chuông/rung cục bộ trên máy/điện thoại, chỉ gửi Discord")
+    ap.add_argument("--daemon", action="store_true", default=DEFAULT_DAEMON,
+                    help="Chạy liên tục 24/7 qua các ngày (tự bật --fetch và --alarm)")
+    ap.add_argument("--daily-at", default=DEFAULT_DAILY_AT,
+                    help="Giờ tự động quét lại ngày mới khi dùng --daemon (mặc định 06:00)")
+    ap.add_argument("--rescan-hours", type=float, default=DEFAULT_RESCAN_HOURS,
+                    help="Quét lại mỗi X giờ trong ngày khi dùng --daemon (0 = chỉ quét 1 lần/ngày)")
+    # Các tham số khi --fetch
+    ap.add_argument("--province",  default="1027")
+    ap.add_argument("--store",     default="8916")
+    ap.add_argument("--ward",      default="100731")
+    ap.add_argument("--page-size", type=int, default=0)
+    ap.add_argument("--out",       help="Tên file JSON khi --fetch")
+    args = ap.parse_args()
+
+    if args.daemon:
+        args.fetch = True
+        args.alarm = True
+        acquire_alarm_pidfile()
+        print(f"♾️ Đã bật chế độ chạy liên tục 24/7 (--daemon) | Quét ngày mới lúc {args.daily_at}"
+              + (f" | Quét lại mỗi {args.rescan_hours:g} giờ" if args.rescan_hours > 0 else ""))
+        while True:
+            wakeup = next_daemon_wakeup(args.daily_at, args.rescan_hours)
+            try:
+                run_cycle(args, stop_before=wakeup)
+            except SystemExit:
+                print("⚠ Lỗi khi lấy dữ liệu, sẽ thử lại sau 5 phút...", file=sys.stderr)
+                time.sleep(300)
+                continue
+            except Exception as ex:
+                print(f"⚠ Lỗi không mong muốn: {ex} — thử lại sau 5 phút...", file=sys.stderr)
+                time.sleep(300)
+                continue
+
+            if args.dry_run:
+                return 0
+
+            now = datetime.now().astimezone()
+            sleep_secs = (wakeup - now).total_seconds()
+            if sleep_secs > 0:
+                print(f"\n😴 Đã xong chu kỳ hiện tại. Ngủ tới {wakeup.strftime('%H:%M %d/%m/%Y')} ({int(sleep_secs)}s)...")
+                time.sleep(sleep_secs)
+    else:
+        if not args.fetch and not args.json_file:
+            ap.error("Cần cung cấp file JSON hoặc dùng --fetch")
+        return run_cycle(args)
 
 
 if __name__ == "__main__":

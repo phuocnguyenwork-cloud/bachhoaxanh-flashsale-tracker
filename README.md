@@ -109,10 +109,21 @@ Nếu bạn muốn theo dõi sản phẩm cụ thể và muốn biết **khi nà
    * Quét **mọi khung giờ** và **tất cả mức giá có thể có** (tất cả quy cách đóng gói, trọng lượng...) của sản phẩm đó.
    * Gom và hiển thị **đầy đủ mọi ca sale trong ngày** có mức giá $\le$ mức bạn kỳ vọng trong một thông báo duy nhất trên Discord (kèm nút bấm đặt mua nhanh).
    * In chi tiết từng ca trên Terminal.
-   * **Báo thức trước 1 phút (tuỳ chọn `--alarm`)**: Khi bạn bật cờ `--alarm` (hoặc biến môi trường `BHX_ALARM=1`), hệ thống sẽ tự động canh giờ và gửi báo thức khẩn lên Discord (`@everyone`) trước **1 phút** khi mỗi ca đạt giá kỳ vọng bắt đầu (đồng thời phát thông báo/rung nếu chạy trên Termux Android hoặc bíp trên Windows):
-     ```powershell
-     python notify_discord.py --fetch --alarm
-     ```
+   * **Báo thức trước giờ mở bán & Chạy liên tục 24/7 (`--alarm` / `--daemon`)**:
+     - Chạy 1 ngày (từ lúc bật đến hết các ca trong ngày):
+       ```powershell
+       python notify_discord.py --fetch --alarm
+       ```
+     - Chạy **1 lần dùng mãi mãi 24/7** qua các ngày (`--daemon` tự bật `--fetch` và `--alarm`, tự quét lại ngày mới lúc `06:00`):
+       ```bash
+       nohup ./run.sh --daemon > tracker.log 2>&1 &
+       ```
+     - **Các tham số cấu hình cho Alarm / Daemon** (dùng được cả cờ CLI hoặc biến môi trường):
+       - `--alarm-lead <phút>` (`BHX_ALARM_LEAD`, mặc định `1`): Báo thức trước giờ mở bán bao nhiêu phút (ví dụ `--alarm-lead 2` hoặc `0.5`).
+       - `--alarm-mention <tag>` (`BHX_ALARM_MENTION`, mặc định `@everyone`): Tag trên Discord khi báo thức (`@everyone`, `@here`, `none` để tắt tag, hoặc `<@&ROLE_ID>`).
+       - `--no-local-alarm` (`BHX_NO_LOCAL_ALARM=1`): Tắt chuông/rung cục bộ trên máy/điện thoại, chỉ gửi Discord.
+       - `--daily-at <HH:MM>` (`BHX_DAILY_AT`, mặc định `06:00`): Giờ tự động quét lại cho ngày mới khi bật `--daemon`.
+       - `--rescan-hours <giờ>` (`BHX_RESCAN_HOURS`, mặc định `0`): Quét lại mỗi X giờ trong ngày (ví dụ `4`) để cập nhật nếu BHX thêm deal giữa ngày.
 *(Nếu file này để trống, chương trình chỉ quét và thông báo Flash Sale chính bình thường)*.
 
 ---
